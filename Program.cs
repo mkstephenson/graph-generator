@@ -1,5 +1,6 @@
 ﻿using System.Numerics;
 using SkiaSharp;
+using System.Text.Json;
 
 const int mapBuffer = 2;
 const int mapWidth = 512 + (mapBuffer * 2);
@@ -33,6 +34,43 @@ for (int x = mapBuffer; x <= mapWidth - mapBuffer; x++)
   }
 }
 
+for (int i = 0; i < mapNodeClusterSize; i++)
+{
+  for (int j = 0; j < mapNodeClusterSize; j++)
+  {
+    Console.WriteLine($"Removing redundant nodes at {i}:{j}");
+    int loopCount = 0;
+    bool removed = false;
+    do
+    {
+      Console.WriteLine($"Loop {++loopCount}");
+      removed = false;
+      List<Node> relevantNodes = [.. mapNodeClusters[i, j]];
+
+      AddRelevantNodeClusters(mapNodeClusterSize, mapNodeClusters, i, j, relevantNodes);
+
+      List<Node> processedNodes = [];
+      List<Node> toRemove = [];
+      foreach (var node in mapNodeClusters[i, j])
+      {
+        if (processedNodes.Contains(node))
+        {
+          continue;
+        }
+        
+        List<Node> nearbyNodes = [.. relevantNodes.Where(n => n != node && Vector2.Distance(n.Position, node.Position) <= 20f)];
+        if (nearbyNodes.Count != 0)
+        {
+          toRemove.Add(node);
+          processedNodes.AddRange(nearbyNodes);
+          removed = true;
+        }
+      }
+      mapNodeClusters[i, j].RemoveAll(toRemove.Contains);
+    } while (removed);
+  }
+}
+
 Parallel.For(0, mapNodeClusterSize, i =>
 {
   for (int j = 0; j < mapNodeClusterSize; j++)
@@ -60,28 +98,58 @@ Parallel.For(0, mapNodeClusterSize, i =>
   }
 });
 
+using var mapJsonFileStream = File.Create("map.json");
+using var mapJsonStream = new Utf8JsonWriter(mapJsonFileStream);
+mapJsonStream.WriteStartArray();
 var bounds = new SKRect(0, 0, mapWidth * scale, mapHeight * scale);
 using var svgStream = File.Create("map.svg");
 using var canvas = SKSvgCanvas.Create(bounds, svgStream);
 
-for (int i = 0; i < mapNodeClusterSize; i++)
+ApplySomethingToAllNodes(node =>
 {
-  for (int j = 0; j < mapNodeClusterSize; j++)
+  foreach (var connected in node.Nodes)
   {
-    foreach (var node in mapNodeClusters[i, j])
-    {
-      foreach (var connected in node.Nodes)
-      {
-        float x1 = node.Position.X;
-        float y1 = node.Position.Y;
-        float x2 = connected.Position.X;
-        float y2 = connected.Position.Y;
-        canvas.DrawLine(x1, y1, x2, y2, new SKPaint { Color = SKColors.Blue, StrokeWidth = 1 });
-      }
+    float x1 = node.Position.X;
+    float y1 = node.Position.Y;
+    float x2 = connected.Position.X;
+    float y2 = connected.Position.Y;
+    canvas.DrawLine(x1, y1, x2, y2, new SKPaint { Color = SKColors.Blue, StrokeWidth = 1 });
+  }
 
-      float x = node.Position.X;
-      float y = node.Position.Y;
-      canvas.DrawCircle(x, y, 3, new SKPaint { Color = SKColors.Black });
+  mapJsonStream.WriteStartObject();
+  mapJsonStream.WriteString("id", node.Id);
+  mapJsonStream.WriteStartObject("position");
+  mapJsonStream.WriteNumber("x", node.Position.X);
+  mapJsonStream.WriteNumber("y", node.Position.Y);
+  mapJsonStream.WriteEndObject();
+  mapJsonStream.WriteStartArray("connectedNodes");
+  foreach (var innerNode in node.Nodes)
+  {
+    mapJsonStream.WriteStringValue(innerNode.Id);
+  }
+  mapJsonStream.WriteEndArray();
+  mapJsonStream.WriteEndObject();
+});
+
+ApplySomethingToAllNodes(node =>
+{
+  float x = node.Position.X;
+  float y = node.Position.Y;
+  canvas.DrawCircle(x, y, 3, new SKPaint { Color = SKColors.Black });
+});
+
+mapJsonStream.WriteEndArray();
+
+void ApplySomethingToAllNodes(Action<Node> action)
+{
+  for (int i = 0; i < mapNodeClusterSize; i++)
+  {
+    for (int j = 0; j < mapNodeClusterSize; j++)
+    {
+      foreach (var node in mapNodeClusters[i, j])
+      {
+        action(node);
+      }
     }
   }
 }
